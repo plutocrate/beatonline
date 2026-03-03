@@ -381,6 +381,25 @@ function parseFBX(buffer) {
 }
 
 async function loadCharacterAndAnims() {
+  // ── Wait for at least one buffer to be ready ──────────────
+  // Background fetch may still be running when user clicks START.
+  // Poll every 100ms for up to 30s before giving up.
+  const wantedSlots = selectedAnimSlots.size > 0
+    ? [...selectedAnimSlots]
+    : Object.keys(G.loadedAnimBuffers);
+
+  const preferred = ['idle','left','right','up', ...wantedSlots];
+  let waitMs = 0;
+  while (waitMs < 30000) {
+    const ready = preferred.find(s => G.loadedAnimBuffers[s]);
+    if (ready) break;
+    // Also accept any loaded buffer at all
+    if (Object.keys(G.loadedAnimBuffers).length > 0) break;
+    setLoadingUI('Waiting for animation data…', 12 + Math.min(waitMs / 500, 5));
+    await new Promise(r => setTimeout(r, 100));
+    waitMs += 100;
+  }
+
   // Determine which slots to use
   const allSlots = Object.keys(G.loadedAnimBuffers);
   const slots = selectedAnimSlots.size > 0
@@ -1435,17 +1454,29 @@ async function initAnimationPanel(forceRefresh) {
     }
   }
 
-  // ── Fetch ALL unfetched slots in background — no blocking ──────
-  // Game can start as soon as 1 slot is in G.loadedAnimBuffers.
-  // The rest stream in during gameplay via streamRemainingAnims().
-  // Fetch defaults first (they load into the game immediately),
-  // then extras (they join the queue as they arrive mid-game).
+  // ── Fetch strategy ─────────────────────────────────────────
+  // 1. Fetch the FIRST default slot immediately (no yield) so
+  //    loadCharacterAndAnims has something to work with ASAP.
+  // 2. Fetch remaining defaults one-by-one.
+  // 3. Fetch extras in the background after defaults are done.
+  //    The game streams extras in via streamRemainingAnims() during play.
   (async () => {
-    const ordered = [...defaultToFetch, ...extrasToFetch];
-    for (const def of ordered) {
+    // First slot: fetch immediately, no delay
+    if (defaultToFetch.length > 0) {
+      const first = defaultToFetch[0];
+      const result = await fetchFBX(first, 0).catch(() => null);
+      applyResult(first, result);
+    }
+    // Remaining defaults: fetch quickly
+    for (const def of defaultToFetch.slice(1)) {
       const result = await fetchFBX(def, 0).catch(() => null);
       applyResult(def, result);
-      await new Promise(r => setTimeout(r, 50)); // yield between fetches
+    }
+    // Extras: low-priority, small delay between each
+    for (const def of extrasToFetch) {
+      await new Promise(r => setTimeout(r, 100));
+      const result = await fetchFBX(def, 0).catch(() => null);
+      applyResult(def, result);
     }
     _animPanelInitialized = true;
   })();
