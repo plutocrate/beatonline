@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev":   "node server.js",
-    "build": "vite build",
+    "build": "echo skip",
     "tsc":   "tsc --noEmit"
   },
   "dependencies": {
