@@ -141,8 +141,15 @@ function getHighEnergy()   { return getFreqBand(2000,8000); }
 
 async function detectBPM(buffer) {
   const sr = buffer.sampleRate;
-  const offline = new OfflineAudioContext(1, buffer.length, sr);
-  const src = offline.createBufferSource(); src.buffer = buffer;
+  // Only analyze first 30s — enough for accurate BPM, 10x faster for long tracks
+  const analyzeSecs = Math.min(30, buffer.duration);
+  const analyzeLen  = Math.floor(analyzeSecs * sr);
+  const offline = new OfflineAudioContext(1, analyzeLen, sr);
+  const src = offline.createBufferSource();
+  // Create a short copy so we don't hold the full buffer reference
+  const shortBuf = offline.createBuffer(1, analyzeLen, sr);
+  shortBuf.copyToChannel(buffer.getChannelData(0).subarray(0, analyzeLen), 0);
+  src.buffer = shortBuf;
   const f = offline.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 200;
   src.connect(f); f.connect(offline.destination); src.start(0);
   const rendered = await offline.startRendering();
@@ -404,12 +411,18 @@ async function loadCharacterAndAnims() {
     }
   } catch(e) { console.warn('Base FBX failed, using fallback:', e); buildFallbackChar(); return; }
 
+  // Parse all remaining FBX files in parallel — much faster than sequential
+  const remainingSlots = slots.filter(s => s !== primarySlot);
+  setLoadingUI(`Parsing ${remainingSlots.length} animations in parallel…`, 20);
+  const parseResults = await Promise.allSettled(
+    remainingSlots.map(slot =>
+      parseFBX(G.loadedAnimBuffers[slot]).then(fbx => ({ slot, fbx }))
+    )
+  );
   let done = 1;
-  for (const slot of slots) {
-    if (slot === primarySlot) { done++; continue; }
-    setLoadingUI(`Loading animation: ${slot}…`, 15 + Math.round((done/slots.length)*70));
-    try {
-      const fbx = await parseFBX(G.loadedAnimBuffers[slot]);
+  for (const result of parseResults) {
+    if (result.status === 'fulfilled') {
+      const { slot, fbx } = result.value;
       if (fbx.animations && fbx.animations.length > 0) {
         const clip = fbx.animations[0]; clip.name = slot;
         const action = mixer.clipAction(clip);
@@ -417,8 +430,11 @@ async function loadCharacterAndAnims() {
         action.clampWhenFinished = false;
         animActions[slot] = action;
       }
-    } catch(e) { console.warn(`Anim load failed (${slot}):`, e); }
+    } else {
+      console.warn(`Anim load failed:`, result.reason);
+    }
     done++;
+    setLoadingUI(`Loaded ${done}/${slots.length} animations…`, 20 + Math.round((done/slots.length)*60));
   }
 
   const startSlot = animActions['idle'] ? 'idle' : Object.keys(animActions)[0];
@@ -426,22 +442,21 @@ async function loadCharacterAndAnims() {
     // Queue system: listen for finished events to chain animations
     animQueue = Object.keys(animActions);
     animQueueIdx = 0;
-    _clipStartTime = 0;
-    _animClock = 0;
+    _clipStartTime = 0; _animClock = 0;
     playAnimSlot(animQueue[0]);
   }
 }
 
 // ── Time-driven animation playlist ──────────────────────────
-// Clips cycle 1->2->3->4->1->... driven purely by elapsed time.
-// No 'finished' events - we check every frame. Bulletproof.
-let animQueue    = [];    // ordered slot names
-let animQueueIdx = 0;     // which clip is currently playing
-let animPending  = null;  // unused - kept for compat
-let animWaiting  = false; // unused - kept for compat
-let _clipStartTime = 0;   // mixer.time when current clip began
-let _animClock   = 0;     // total mixer time accumulator
-const CROSSFADE  = 0.35;  // seconds of overlap between clips
+// Clips cycle 1->2->3->4->1... driven by elapsed time every frame.
+// No finished events - bulletproof looping for any number of clips.
+let animQueue    = [];
+let animQueueIdx = 0;
+let animPending  = null;
+let animWaiting  = false;
+let _clipStartTime = 0;
+let _animClock     = 0;
+const CROSSFADE    = 0.35;
 
 function playAnimSlot(slot, fade) {
   if (!mixer) return;
@@ -449,10 +464,11 @@ function playAnimSlot(slot, fade) {
   if (!target) return;
   const ft   = (fade !== undefined) ? fade : CROSSFADE;
   const prev = currentAction;
-  // Fully reset target - LoopRepeat keeps it ticking, weight=1 makes it visible
+  target.stop();
   target.reset();
   target.setEffectiveTimeScale(1);
   target.setEffectiveWeight(1);
+  target.clampWhenFinished = false;
   target.play();
   if (prev && prev !== target) {
     prev.crossFadeTo(target, ft, false);
@@ -464,28 +480,26 @@ function playAnimSlot(slot, fade) {
   qs('#dance-mode').textContent  = label;
 }
 
-// Called every frame from gameLoop with the frame delta
 function tickAnimPlaylist(delta) {
   if (!mixer || animQueue.length === 0 || !currentAction) return;
   _animClock += delta;
-  const clip    = currentAction._clip;
+  const clip  = currentAction._clip;
   if (!clip) return;
   const dur     = clip.duration;
   const elapsed = _animClock - _clipStartTime;
-  // Switch CROSSFADE seconds before end so blend is seamless
   const switchAt = Math.max(dur - CROSSFADE, dur * 0.5);
   if (elapsed >= switchAt) {
-    const nextIdx  = (animQueueIdx + 1) % animQueue.length;
-    animQueueIdx   = nextIdx;
+    const nextIdx = (animQueueIdx + 1) % animQueue.length;
+    animQueueIdx  = nextIdx;
     playAnimSlot(animQueue[nextIdx], CROSSFADE);
   }
 }
 
-function onAnimFinished(e) { /* no-op - time-driven now */ }
-function scheduleNextAnim(preferredSlot) { /* no-op - playlist auto-advances */ }
+function onAnimFinished(e) {}
+function scheduleNextAnim(s) {}
 let _idleTimer = null;
-function transitionTo(slot, fade) { /* no-op - playlist runs itself */ }
-function returnToIdle() { /* no-op - playlist runs itself */ }
+function transitionTo(slot, fade) {}
+function returnToIdle() {}
 
 // Procedural stumble for miss
 function triggerStumble() {
@@ -1106,8 +1120,30 @@ async function startGame() {
   setLoadingUI('Decoding audio…', 83);
   let rawBuffer;
   if (G.selectedTrackURL) {
+    // Stream with progress so user sees download happening, not frozen spinner
+    setLoadingUI('Downloading audio…', 83);
     const res = await fetch(G.selectedTrackURL);
-    rawBuffer = await res.arrayBuffer();
+    const contentLength = res.headers.get('Content-Length');
+    if (contentLength && res.body) {
+      const total  = parseInt(contentLength, 10);
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        const pct = Math.round((received / total) * 100);
+        setLoadingUI(`Downloading audio… ${pct}%`, 83 + Math.round(pct * 0.05));
+      }
+      const merged = new Uint8Array(received);
+      let offset = 0;
+      for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+      rawBuffer = merged.buffer;
+    } else {
+      rawBuffer = await res.arrayBuffer();
+    }
   } else if (G.selectedTrackFile) {
     rawBuffer = await G.selectedTrackFile.arrayBuffer();
   }
