@@ -443,12 +443,7 @@ async function loadCharacterAndAnims() {
   animQueueIdx = 0;
   _clipStartTime = 0; _animClock = 0;
   playAnimSlot(primarySlot);
-
-  // ── Stream remaining slots one-by-one in the background ─────
-  // Each slot: fetch buffer (if not cached) → parse FBX → add to mixer + queue
-  // The game is already running while this happens.
-  const remainingSlots = slots.filter(s => s !== primarySlot);
-  streamRemainingAnims(remainingSlots);
+  // Remaining slots streamed in after game starts — see startGame()
 }
 
 // Called during gameplay — trickle-loads remaining animations one at a time.
@@ -456,8 +451,8 @@ async function loadCharacterAndAnims() {
 async function streamRemainingAnims(slots) {
   if (!slots || slots.length === 0) return;
   for (const slot of slots) {
-    // Stop if game ended or user went back to menu
-    if (!mixer || !G.isPlaying) break;
+    // Stop if the 3D scene was torn down (user went to menu or restarted)
+    if (!mixer || !character) break;
 
     // Skip if already parsed into animActions
     if (animActions[slot]) {
@@ -495,7 +490,7 @@ async function streamRemainingAnims(slots) {
     // Parse FBX and add to the live mixer — no game interruption
     try {
       const fbx = await parseFBX(G.loadedAnimBuffers[slot]);
-      if (!mixer) break; // game ended while parsing
+      if (!mixer || !character) break; // scene torn down
       if (fbx.animations && fbx.animations.length > 0) {
         const clip = fbx.animations[0]; clip.name = slot;
         const action = mixer.clipAction(clip);
@@ -1277,8 +1272,15 @@ async function startGame() {
   updateScoreUI();
   updateHealthBar();
   await new Promise(r => setTimeout(r, 80));
-  await startAudio();
+  await startAudio();  // G.isPlaying = true after this
   gameLoop();
+  // Stream remaining animations during gameplay — G.isPlaying is now true
+  const _allLoaded = Object.keys(G.loadedAnimBuffers);
+  const _wantedSlots = selectedAnimSlots.size > 0
+    ? _allLoaded.filter(s => selectedAnimSlots.has(s))
+    : _allLoaded;
+  const _remainingSlots = _wantedSlots.filter(s => !animActions[s]);
+  if (_remainingSlots.length > 0) streamRemainingAnims(_remainingSlots);
 }
 
 // ─────────────────────────────────────────────────────────────
