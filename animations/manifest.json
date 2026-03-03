@@ -1,0 +1,69 @@
+{
+  "animations": [
+    {
+      "slot": "idle",
+      "file": "House Dancing.fbx",
+      "label": "House Dancing"
+    },
+    {
+      "slot": "left",
+      "file": "Salsa Dancing.fbx",
+      "label": "Salsa Dancing"
+    },
+    {
+      "slot": "extra1",
+      "file": "Swing Dancing (1).fbx",
+      "label": "Swing Dancing (1)"
+    },
+    {
+      "slot": "extra2",
+      "file": "Swing Dancing (2).fbx",
+      "label": "Swing Dancing (2)"
+    },
+    {
+      "slot": "extra3",
+      "file": "Swing Dancing.fbx",
+      "label": "Swing Dancing"
+    },
+    {
+      "slot": "right",
+      "file": "Step Hip Hop Dance.fbx",
+      "label": "Step Hip Hop Dance"
+    },
+    {
+      "slot": "up",
+      "file": "Gangnam Style.fbx",
+      "label": "Gangnam Style"
+    },
+    {
+      "slot": "extra4",
+      "file": "Thriller Part 3.fbx",
+      "label": "Thriller Part 3"
+    },
+    {
+      "slot": "down",
+      "file": "Chicken Dance.fbx",
+      "label": "Chicken Dance"
+    },
+    {
+      "slot": "extra5",
+      "file": "Silly Dancing.fbx",
+      "label": "Silly Dancing"
+    },
+    {
+      "slot": "special",
+      "file": "Breakdance Uprock.fbx",
+      "label": "Breakdance Uprock"
+    },
+    {
+      "slot": "extra6",
+      "file": "Northern Soul Floor Combo.fbx",
+      "label": "Northern Soul Floor Combo"
+    },
+    {
+      "slot": "extra7",
+      "file": "Samba Dancing.fbx",
+      "label": "Samba Dancing"
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BEAT DANCER</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap');
+  :root{--bg:#050508;--accent:#ff2d78;--accent2:#00f5d4;--accent3:#ffe600;--panel:rgba(255,255,255,0.04);--border:rgba(255,255,255,0.08);}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:#fff;font-family:'Space Mono',monospace;overflow:hidden;height:100vh;width:100vw;}
+  #canvas-container{position:fixed;inset:0;z-index:0;}
+  #canvas-container canvas{display:block;}
+  #beat-flash{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 110%,var(--accent) 0%,transparent 70%);opacity:0;transition:opacity 0.05s;z-index:5;}
+
+  /* ── Loading ─────────────────────────────── */
+  #loading-screen{position:fixed;inset:0;z-index:200;background:var(--bg);display:none;flex-direction:column;align-items:center;justify-content:center;gap:20px;}
+  .ld-title{font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:8px;color:rgba(255,255,255,0.6);}
+  .ld-bar-wrap{width:320px;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;}
+  #loading-bar{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.25s;box-shadow:0 0 10px var(--accent2);}
+  #loading-status{font-size:11px;letter-spacing:2px;color:rgba(255,255,255,0.3);}
+
+  /* ── Start Screen ────────────────────────── */
+  #start-screen{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:16px;overflow-y:auto;padding:28px 20px 40px;pointer-events:all;}
+  .logo{font-family:'Bebas Neue',sans-serif;font-size:clamp(44px,9vw,88px);letter-spacing:10px;line-height:1;background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 60%,var(--accent3) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 40px rgba(255,45,120,0.5));animation:logoPulse 2s ease-in-out infinite;}
+  @keyframes logoPulse{0%,100%{filter:drop-shadow(0 0 40px rgba(255,45,120,0.5));}50%{filter:drop-shadow(0 0 80px rgba(0,245,212,0.7));}}
+
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:14px;width:min(780px,96vw);}
+  @media(max-width:560px){.panels{grid-template-columns:1fr;}}
+  .panel{border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--panel);display:flex;flex-direction:column;gap:8px;}
+  .panel-title{font-size:9px;letter-spacing:3px;color:rgba(255,255,255,0.3);text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:7px;margin-bottom:2px;display:flex;align-items:center;gap:6px;}
+
+  /* Anim grid — scrollable, 2 col */
+  .anim-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;max-height:220px;overflow-y:auto;padding-right:2px;}
+  .anim-grid::-webkit-scrollbar{width:3px;}
+  .anim-grid::-webkit-scrollbar-thumb{background:rgba(0,245,212,0.3);border-radius:2px;}
+  .anim-card{border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:10px;letter-spacing:0.5px;color:rgba(255,255,255,0.35);background:rgba(0,0,0,0.3);display:flex;align-items:center;gap:6px;cursor:pointer;transition:all 0.13s;user-select:none;}
+  .anim-card:hover{border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.6);}
+  .anim-card.selected{border-color:var(--accent2);color:var(--accent2);background:rgba(0,245,212,0.06);}
+  .anim-card.selected .anim-dot{background:var(--accent2);box-shadow:0 0 6px var(--accent2);}
+  .anim-card.loading{opacity:0.5;}
+  .anim-card.error{border-color:rgba(255,45,120,0.3);opacity:0.4;cursor:not-allowed;}
+  .anim-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.12);flex-shrink:0;transition:all 0.15s;}
+  .anim-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:9.5px;}
+
+  /* Music list */
+  .music-list{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto;}
+  .music-list::-webkit-scrollbar{width:3px;}
+  .music-list::-webkit-scrollbar-thumb{background:var(--accent);border-radius:2px;}
+  .music-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;border:1px solid transparent;transition:all 0.12s;font-size:11px;letter-spacing:1px;color:rgba(255,255,255,0.45);}
+  .music-item:hover{background:rgba(255,45,120,0.08);border-color:rgba(255,45,120,0.25);color:#fff;}
+  .music-item.selected{background:rgba(0,245,212,0.08);border-color:var(--accent2);color:var(--accent2);}
+  .music-item .mi-dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.12);flex-shrink:0;}
+  .music-item.selected .mi-dot{background:var(--accent2);box-shadow:0 0 6px var(--accent2);}
+  .music-item .mi-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .music-empty{font-size:10px;color:rgba(255,255,255,0.18);letter-spacing:1px;padding:4px 2px;}
+  .music-upload-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;border:1px dashed rgba(255,255,255,0.1);font-size:10px;letter-spacing:1px;color:rgba(255,255,255,0.28);transition:all 0.15s;position:relative;margin-top:2px;}
+  .music-upload-row:hover{border-color:var(--accent2);color:rgba(255,255,255,0.55);}
+  .music-upload-row input{position:absolute;inset:0;opacity:0;cursor:pointer;}
+  #music-decode-status{font-size:10px;color:rgba(255,255,255,0.22);letter-spacing:1px;min-height:14px;}
+
+  .start-btn{width:min(320px,90vw);background:linear-gradient(135deg,var(--accent),#c4006a);border:none;border-radius:8px;padding:14px 0;font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:6px;color:#fff;cursor:pointer;transition:all 0.15s;box-shadow:0 0 28px rgba(255,45,120,0.3);}
+  .start-btn:hover:not(:disabled){transform:scale(1.03);box-shadow:0 0 48px rgba(255,45,120,0.65);}
+  .start-btn:disabled{opacity:0.22;cursor:not-allowed;}
+
+  .controls-hint{font-size:9px;color:rgba(255,255,255,0.15);letter-spacing:2px;text-align:center;line-height:2.2;}
+  .controls-hint b{color:rgba(255,255,255,0.4);}
+
+  /* ── Restart Screen ──────────────────────── */
+  #restart-screen{position:fixed;inset:0;z-index:150;background:rgba(5,5,8,0.92);display:none;flex-direction:column;align-items:center;justify-content:center;gap:22px;backdrop-filter:blur(8px);}
+  .restart-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(38px,8vw,72px);letter-spacing:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .restart-score{font-family:'Bebas Neue',sans-serif;font-size:clamp(48px,10vw,96px);letter-spacing:4px;color:#fff;text-shadow:0 0 30px var(--accent2);line-height:1;}
+  .restart-combo{font-size:12px;letter-spacing:3px;color:rgba(255,255,255,0.35);}
+  .restart-btns{display:flex;gap:12px;margin-top:6px;}
+  .restart-btn{padding:12px 32px;border:none;border-radius:8px;font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:5px;cursor:pointer;transition:all 0.15s;}
+  #restart-btn{background:linear-gradient(135deg,var(--accent),#c4006a);color:#fff;box-shadow:0 0 20px rgba(255,45,120,0.3);}
+  #restart-btn:hover{transform:scale(1.04);box-shadow:0 0 40px rgba(255,45,120,0.6);}
+  #menu-btn{background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.55);border:1px solid rgba(255,255,255,0.12);}
+  #menu-btn:hover{background:rgba(255,255,255,0.1);color:#fff;}
+
+  /* ── Game UI ─────────────────────────────── */
+  #ui-overlay{position:fixed;inset:0;z-index:10;pointer-events:none;display:none;}
+  #score-panel{position:absolute;top:24px;left:32px;}
+  #score-label{font-family:'Bebas Neue',sans-serif;font-size:11px;letter-spacing:4px;color:rgba(255,255,255,0.3);}
+  #score-value{font-family:'Bebas Neue',sans-serif;font-size:52px;line-height:1;letter-spacing:2px;color:#fff;text-shadow:0 0 20px var(--accent);}
+  #combo-value{font-family:'Bebas Neue',sans-serif;font-size:19px;color:var(--accent2);letter-spacing:3px;text-shadow:0 0 12px var(--accent2);transition:transform 0.1s;}
+  #song-info{position:absolute;top:24px;right:32px;text-align:right;}
+  #song-name{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:3px;color:rgba(255,255,255,0.65);}
+  #bpm-display{font-size:10px;color:rgba(255,255,255,0.25);letter-spacing:2px;margin-top:2px;}
+  #dance-mode{position:absolute;top:78px;left:32px;font-size:9px;letter-spacing:3px;color:rgba(255,255,255,0.18);}
+  #anim-label{position:absolute;bottom:175px;left:32px;font-size:9px;letter-spacing:2px;color:rgba(255,255,255,0.18);}
+  #notes-lane{position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:320px;height:100vh;pointer-events:none;}
+  .note-element{position:absolute;width:48px;height:48px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:20px;border:2px solid;}
+  .note-element.left{background:rgba(255,45,120,0.2);border-color:var(--accent);color:var(--accent);left:16px;}
+  .note-element.right{background:rgba(0,245,212,0.2);border-color:var(--accent2);color:var(--accent2);right:16px;}
+  .note-element.up{background:rgba(255,230,0,0.2);border-color:var(--accent3);color:var(--accent3);left:50%;transform:translateX(-50%);}
+  .note-element.down{background:rgba(180,0,255,0.2);border-color:#b400ff;color:#b400ff;left:50%;transform:translateX(-50%);}
+  #hit-zone{position:absolute;bottom:100px;left:50%;transform:translateX(-50%);width:260px;height:60px;display:flex;gap:8px;justify-content:center;align-items:center;}
+  .key-slot{width:56px;height:56px;border:2px solid rgba(255,255,255,0.14);border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:22px;color:rgba(255,255,255,0.28);background:rgba(0,0,0,0.4);transition:all 0.08s;}
+  .key-slot.active{border-color:var(--accent2);color:var(--accent2);background:rgba(0,245,212,0.1);box-shadow:0 0 20px rgba(0,245,212,0.4);transform:scale(1.08);}
+  .key-slot.miss-flash{border-color:var(--accent);background:rgba(255,45,120,0.15);}
+  #accuracy-popup{position:absolute;bottom:180px;left:50%;transform:translateX(-50%);font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:6px;pointer-events:none;opacity:0;}
+  #accuracy-popup.perfect{color:var(--accent2);text-shadow:0 0 24px var(--accent2);}
+  #accuracy-popup.good   {color:var(--accent3);text-shadow:0 0 20px var(--accent3);}
+  #accuracy-popup.miss   {color:var(--accent); text-shadow:0 0 24px var(--accent);}
+  #accuracy-popup.early  {color:#ff9900;text-shadow:0 0 18px #ff9900;}
+  #accuracy-popup.late   {color:#ff6600;text-shadow:0 0 18px #ff6600;}
+  #hp-bar-outer{position:absolute;top:24px;left:50%;transform:translateX(-50%);width:160px;height:5px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;}
+  #hp-bar-inner{height:100%;width:100%;background:linear-gradient(90deg,#00f5d4,#00e5a4);border-radius:3px;transition:width 0.2s;box-shadow:0 0 8px #00f5d4;}
+  #progress-bar-outer{position:absolute;bottom:170px;left:50%;transform:translateX(-50%);width:260px;height:2px;background:rgba(255,255,255,0.06);border-radius:1px;}
+  #progress-bar-inner{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:1px;box-shadow:0 0 5px var(--accent2);transition:width 0.1s linear;}
+</style>
+</head>
+<body>
+
+<div id="loading-screen">
+  <div class="ld-title">LOADING</div>
+  <div class="ld-bar-wrap"><div id="loading-bar"></div></div>
+  <div id="loading-status">Initializing…</div>
+</div>
+
+<div id="start-screen">
+  <div class="logo">BEAT DANCER</div>
+
+  <div class="panels">
+    <!-- Animations Panel -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>🕺 Animations</span>
+        <span id="anim-sel-count" style="color:rgba(0,245,212,0.55);font-size:8px"></span>
+        <div style="flex:1"></div>
+        <button id="anim-toggle-all" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:4px;padding:2px 7px;font-size:8px;letter-spacing:1px;color:rgba(255,255,255,0.3);cursor:pointer;font-family:inherit">ALL</button>
+        <button id="refresh-btn" style="background:rgba(0,245,212,0.05);border:1px solid rgba(0,245,212,0.15);border-radius:4px;padding:2px 7px;font-size:8px;letter-spacing:1px;color:rgba(0,245,212,0.5);cursor:pointer;font-family:inherit">↻</button>
+      </div>
+      <div class="anim-grid" id="anim-grid">
+        <div style="grid-column:1/-1;font-size:10px;color:rgba(255,255,255,0.18);letter-spacing:1px">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Music Panel -->
+    <div class="panel">
+      <div class="panel-title">🎵 Music</div>
+      <div class="music-list" id="music-list">
+        <div class="music-empty">No tracks in music/ folder</div>
+      </div>
+      <div class="music-upload-row">
+        <input type="file" id="music-file-input" accept="audio/*">
+        <span>📂</span><span>Browse from computer…</span>
+      </div>
+      <div id="music-decode-status"></div>
+    </div>
+  </div>
+
+  <button class="start-btn" id="start-btn" disabled>SELECT A TRACK TO START</button>
+
+  <div class="controls-hint">
+    <b>← A</b> Left &nbsp;|&nbsp; <b>→ D</b> Right &nbsp;|&nbsp;
+    <b>↑ W</b> Up &nbsp;|&nbsp; <b>↓ S</b> Down &nbsp;|&nbsp; <b>P / ESC</b> Pause
+  </div>
+</div>
+
+<!-- Restart Screen -->
+<div id="restart-screen">
+  <div class="restart-title">SONG COMPLETE</div>
+  <div class="restart-score" id="final-score">000000</div>
+  <div class="restart-combo" id="final-combo">Best combo: 0x</div>
+  <div class="restart-btns">
+    <button class="restart-btn" id="restart-btn">▶ PLAY AGAIN</button>
+    <button class="restart-btn" id="menu-btn">MENU</button>
+  </div>
+</div>
+
+<div id="canvas-container"></div>
+<div id="beat-flash"></div>
+
+<div id="ui-overlay">
+  <div id="score-panel">
+    <div id="score-label">SCORE</div>
+    <div id="score-value">000000</div>
+    <div id="combo-value">0x COMBO</div>
+  </div>
+  <div id="song-info">
+    <div id="song-name">—</div>
+    <div id="bpm-display">— BPM</div>
+  </div>
+  <div id="dance-mode">IDLE</div>
+  <div id="anim-label">—</div>
+  <div id="notes-lane"></div>
+  <div id="hit-zone">
+    <div class="key-slot" id="key-left">←</div>
+    <div class="key-slot" id="key-down">↓</div>
+    <div class="key-slot" id="key-up">↑</div>
+    <div class="key-slot" id="key-right">→</div>
+  </div>
+  <div id="accuracy-popup"></div>
+  <div id="hp-bar-outer"><div id="hp-bar-inner"></div></div>
+  <div id="progress-bar-outer"><div id="progress-bar-inner"></div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/fflate.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FBXLoader.js"></script>
+
+<script src="../dist/bundle.js"></script>
+</body>
+</html>
