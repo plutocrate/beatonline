@@ -982,13 +982,56 @@ let paused = false, _raf = 0, _songEnded = false;
 function togglePause() {
   if (!G.isPlaying && !paused) return;
   if (paused) {
-    G.isPlaying = false; audioPauseOffset = getSongTime(); startAudio();
-    gameLoop(); paused = false;
+    resumeFromExitMenu();
   } else {
-    audioPauseOffset = getSongTime();
-    try { audioSrc && audioSrc.stop(); } catch(e){}
-    G.isPlaying = false; cancelAnimationFrame(_raf); paused = true;
+    showExitMenu();
   }
+}
+
+// ── Exit menu helpers ──────────────────────────────────────────
+function showExitMenu() {
+  if (!G.isPlaying && !paused) return;
+  // Pause the game
+  audioPauseOffset = getSongTime();
+  try { audioSrc && audioSrc.stop(); } catch(e){}
+  G.isPlaying = false;
+  cancelAnimationFrame(_raf);
+  paused = true;
+  // Show overlay
+  const em = document.querySelector('#exit-menu');
+  if (em) em.classList.add('visible');
+}
+
+function hideExitMenu() {
+  const em = document.querySelector('#exit-menu');
+  if (em) em.classList.remove('visible');
+}
+
+function resumeFromExitMenu() {
+  hideExitMenu();
+  G.isPlaying = false;
+  audioPauseOffset = getSongTime();
+  startAudio();
+  gameLoop();
+  paused = false;
+}
+
+function exitToMenu() {
+  hideExitMenu();
+  // Stop audio + animation loop
+  cancelAnimationFrame(_raf); _raf = 0;
+  if (audioSrc) { try { audioSrc.stop(); } catch(e){} try { audioSrc.disconnect(); } catch(e){} audioSrc = null; }
+  G.isPlaying = false;
+  paused = false;
+  _songEnded = false;
+  // NOTE: intentionally keep G.loadedAnimBuffers, G.audioBuffer, G.selectedTrackURL,
+  // G.selectedTrackFile, G.songName, G.bpm — so returning to menu costs zero re-downloads.
+  // Hide game screens
+  const ov = document.querySelector('#ui-overlay');      if (ov) ov.style.display = 'none';
+  const ls = document.querySelector('#loading-screen');  if (ls) ls.style.display = 'none';
+  const rs = document.querySelector('#restart-screen');  if (rs) rs.style.display = 'none';
+  // Show start screen
+  const ss = document.querySelector('#start-screen');    if (ss) ss.style.display = 'flex';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1494,6 +1537,12 @@ qs('#start-screen').addEventListener('drop', async e => {
     const ls = qs('#loading-screen'); if (ls) ls.style.display = 'none';
     const ss = qs('#start-screen'); if (ss) ss.style.display = 'flex';
   });
+
+  // ── Exit menu buttons (ESC during gameplay) ──────────────
+  const exitResumeBtn = qs('#exit-resume-btn');
+  const exitMenuBtn   = qs('#exit-menu-btn');
+  if (exitResumeBtn) exitResumeBtn.addEventListener('click', resumeFromExitMenu);
+  if (exitMenuBtn)   exitMenuBtn.addEventListener('click', exitToMenu);
 
   // ── Anim panel: ALL toggle + refresh button ─────────────
   const allBtn     = qs('#anim-toggle-all');

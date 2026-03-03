@@ -109,6 +109,18 @@
   #hp-bar-inner{height:100%;width:100%;background:linear-gradient(90deg,#00f5d4,#00e5a4);border-radius:3px;transition:width 0.2s;box-shadow:0 0 8px #00f5d4;}
   #progress-bar-outer{position:absolute;bottom:170px;left:50%;transform:translateX(-50%);width:260px;height:2px;background:rgba(255,255,255,0.06);border-radius:1px;}
   #progress-bar-inner{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:1px;box-shadow:0 0 5px var(--accent2);transition:width 0.1s linear;}
+
+  /* ── Exit Menu ──────────────────────────────────────────── */
+  #exit-menu{position:fixed;inset:0;z-index:200;background:rgba(5,5,8,0.88);display:none;flex-direction:column;align-items:center;justify-content:center;gap:24px;backdrop-filter:blur(10px);}
+  #exit-menu.visible{display:flex;}
+  .exit-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(32px,7vw,64px);letter-spacing:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+  .exit-subtitle{font-size:11px;letter-spacing:3px;color:rgba(255,255,255,0.35);margin-top:-16px;}
+  .exit-btns{display:flex;flex-direction:column;gap:14px;width:min(320px,80vw);}
+  .exit-btn{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:4px;padding:14px 0;border:none;cursor:pointer;border-radius:6px;transition:opacity .15s,transform .1s;}
+  .exit-btn:hover{opacity:.85;transform:scale(1.02);}
+  .exit-btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;}
+  .exit-btn.danger{background:rgba(255,255,255,0.07);color:rgba(255,255,255,0.7);border:1px solid rgba(255,255,255,0.12);}
+
 </style>
 </head>
 <body>
@@ -167,6 +179,16 @@
   <div class="restart-btns">
     <button class="restart-btn" id="restart-btn">▶ PLAY AGAIN</button>
     <button class="restart-btn" id="menu-btn">MENU</button>
+  </div>
+</div>
+
+
+<div id="exit-menu">
+  <div class="exit-title">PAUSED</div>
+  <div class="exit-subtitle">ESC · P TO RESUME</div>
+  <div class="exit-btns">
+    <button class="exit-btn primary" id="exit-resume-btn">▶ RESUME</button>
+    <button class="exit-btn danger"  id="exit-menu-btn">EXIT TO MENU</button>
   </div>
 </div>
 
