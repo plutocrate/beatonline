@@ -95,40 +95,70 @@ export class AnimationController {
   transitionTo(slot: AnimSlot, fadeTime = 0.25): void {
     const target = this.actions.get(slot) ?? this.actions.get('idle');
     if (!target) return;
-    if (target === this.current && this.state !== 'IDLE') return;
+
+    // Only skip if we're already on this exact non-idle slot in a dancing state
+    if (target === this.current && slot !== 'idle' && this.state === 'DANCING') return;
 
     const from = this.current;
 
+    // Always fully reset the target so it plays from the beginning with correct weight
     target.reset();
+    target.setEffectiveTimeScale(1);
+    target.setEffectiveWeight(1);
     target.play();
 
     if (from && from !== target) {
-      from.crossFadeTo(target, fadeTime, true);
+      // warp:false prevents crossFadeTo from corrupting the timeScale of the incoming clip
+      from.crossFadeTo(target, fadeTime, false);
     } else {
       target.fadeIn(fadeTime);
     }
 
     this.current     = target;
     this.currentSlot = slot;
-    this.state       = 'DANCING';
+    this.state       = slot === 'idle' ? 'IDLE' : 'DANCING';
     this.onStateChange?.(this.state, slot);
 
-    // Schedule return to idle
-    this.scheduleIdleReturn(target);
+    // Schedule return to idle only for non-idle moves
+    if (slot !== 'idle') {
+      this.scheduleIdleReturn(target);
+    }
   }
 
   // ── Return to idle ───────────────────────────────────────────
   returnToIdle(fadeTime?: number): void {
     const idle = this.actions.get('idle');
-    if (!idle || this.current === idle) return;
+    if (!idle) return;
+
+    // Cancel any pending idle return timer
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+
+    // If already on idle, just ensure it's healthy and looping
+    if (this.current === idle) {
+      idle.setEffectiveTimeScale(1);
+      idle.setEffectiveWeight(1);
+      if (!idle.isRunning()) {
+        idle.reset();
+        idle.play();
+      }
+      this.state = 'IDLE';
+      this.onStateChange?.(this.state, 'idle');
+      return;
+    }
 
     const ft = fadeTime ?? this.config.idleFade;
 
     idle.reset();
+    idle.setEffectiveTimeScale(1);
+    idle.setEffectiveWeight(1);
     idle.play();
 
     if (this.current) {
-      this.current.crossFadeTo(idle, ft, true);
+      // warp:false to avoid corrupting the idle clip's timeScale on arrival
+      this.current.crossFadeTo(idle, ft, false);
     } else {
       idle.fadeIn(ft);
     }
@@ -142,9 +172,9 @@ export class AnimationController {
   private scheduleIdleReturn(action: THREE.AnimationAction): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
 
-    const beatMs   = (60 / this.bpm) * 1000;
-    const clipMs   = action._clip ? action._clip.duration * 1000 : beatMs * 2;
-    const delayMs  = this.config.returnToIdleMs > 0
+    const beatMs  = (60 / this.bpm) * 1000;
+    const clipMs  = action._clip ? action._clip.duration * 1000 : beatMs * 2;
+    const delayMs = this.config.returnToIdleMs > 0
       ? this.config.returnToIdleMs
       : Math.min(clipMs, beatMs * 4);
 
@@ -156,10 +186,20 @@ export class AnimationController {
   // ── Per-frame update ─────────────────────────────────────────
   update(delta: number): void {
     this.mixer?.update(delta);
+
+    // Safety net: if idle action has somehow stopped while in IDLE state, restart it
+    if (this.state === 'IDLE' && this.current) {
+      if (!this.current.isRunning()) {
+        this.current.reset();
+        this.current.setEffectiveTimeScale(1);
+        this.current.setEffectiveWeight(1);
+        this.current.play();
+      }
+    }
   }
 
   // ── Beat-synced idle pulse ───────────────────────────────────
-  /** Called on every detected beat — can add subtle idle variation */
+  /** Called on every detected beat -- can add subtle idle variation */
   onBeat(energy: number): void {
     if (this.state !== 'IDLE') return;
     const idle = this.actions.get('idle');

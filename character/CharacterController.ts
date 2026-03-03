@@ -84,8 +84,9 @@ export class CharacterController {
       return;
     }
 
-    // Wire AnimationController to this model
-    this.animCtrl.init(this.root);
+    // NOTE: animCtrl.init() is already called inside loadOneSlot for the base model.
+    // Do NOT call it again here -- calling init() twice creates a second mixer and
+    // orphans all previously registered clips, breaking animation looping entirely.
 
     // Start idle
     if (this.animCtrl.getAvailableSlots().includes('idle')) {
@@ -117,6 +118,8 @@ export class CharacterController {
 
       this.scene.add(fbx);
       this.root = fbx;
+
+      // Init the AnimationController ONCE with the base model
       this.animCtrl.init(fbx);
     }
 
