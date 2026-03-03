@@ -17,7 +17,7 @@ const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
-const PORT = parseInt(process.argv[2] || '3000', 10);
+const PORT = parseInt(process.env.PORT || process.argv[2] || '3000', 10);
 const ROOT = __dirname;
 
 // ── MIME map ──────────────────────────────────────────────────
