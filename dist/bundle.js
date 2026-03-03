@@ -1274,12 +1274,19 @@ function updateSelCountEl() {
   if (el) el.textContent = selectedAnimSlots.size > 0 ? '(' + selectedAnimSlots.size + ' selected)' : '';
 }
 
-async function initAnimationPanel() {
+// Tracks whether initAnimationPanel has been called before (for cache logic)
+let _animPanelInitialized = false;
+
+async function initAnimationPanel(forceRefresh) {
   const grid    = qs('#anim-grid');
   const countEl = qs('#anim-sel-count') || { textContent: '' };
 
-  // Wipe old buffers so removed files don't linger
-  G.loadedAnimBuffers = {};
+  // Only wipe buffers on an explicit user-triggered refresh, not on every call.
+  // This preserves already-loaded FBX data when returning from a game session.
+  if (forceRefresh) {
+    G.loadedAnimBuffers = {};
+    _animPanelInitialized = false;
+  }
 
   countEl.textContent = 'scanning…';
   grid.innerHTML = '<div style="grid-column:1/-1;font-size:10px;color:rgba(255,255,255,0.18);letter-spacing:1px;padding:6px 0">Scanning animations/ …</div>';
@@ -1297,20 +1304,17 @@ async function initAnimationPanel() {
   }
 
   grid.innerHTML = '';
-  countEl.textContent = '0 / ' + anims.length;
-  let loadedCount = 0;
+  let loadedCount = Object.keys(G.loadedAnimBuffers).length; // count already-cached
+  countEl.textContent = loadedCount + ' / ' + anims.length;
 
-  // Build cards first (instant UI)
+  // Build cards — restore selected state for already-loaded slots
   const cardMap = {};
   for (const def of anims) {
-    const meta = SLOT_META[def.slot] || {
-      key:   def.slot.replace(/extra(\d+)/, 'E$1').slice(0, 3).toUpperCase(),
-      label: def.label || def.slot
-    };
     const card = document.createElement('div');
+    const alreadyLoaded = !!G.loadedAnimBuffers[def.slot];
     const isDefault = DEFAULT_ANIM_SLOTS.includes(def.slot) && selectedAnimSlots.size < 4;
-    if (isDefault) selectedAnimSlots.add(def.slot);
-    card.className = 'anim-card' + (isDefault ? ' selected' : '');
+    if (isDefault || alreadyLoaded) selectedAnimSlots.add(def.slot);
+    card.className = 'anim-card' + (selectedAnimSlots.has(def.slot) ? ' selected' : '');
     card.id = 'anim-card-' + def.slot;
     card.dataset.slot = def.slot;
     const displayLabel = def.label || def.slot;
@@ -1323,55 +1327,101 @@ async function initAnimationPanel() {
     updateSelCountEl();
   }
 
-  // Fetch FBX files in batches of 3 to avoid overwhelming free-tier RAM/bandwidth
-  // Each file gets 2 retry attempts before giving up
+  // Identify which slots still need fetching (skip already-cached ones)
+  const toFetch = anims.filter(def => !G.loadedAnimBuffers[def.slot]);
+  if (toFetch.length === 0) {
+    // Everything already in memory — update count and return immediately
+    countEl.textContent = loadedCount + ' / ' + anims.length;
+    _animPanelInitialized = true;
+    return;
+  }
+
+  // ── Fetch strategy ──────────────────────────────────────────
+  // Priority 1: default slots (idle, left, right, up) — fetch these first
+  //             so the game can start as soon as possible
+  // Priority 2: remaining extra slots — fetch in background after
+  const defaultToFetch = toFetch.filter(d => DEFAULT_ANIM_SLOTS.includes(d.slot));
+  const extrasToFetch  = toFetch.filter(d => !DEFAULT_ANIM_SLOTS.includes(d.slot));
+
+  // Fetch with retries and timeout — no silent failures
   async function fetchFBX(def, attempt) {
     const encodedFile = encodeURIComponent(def.file);
     const bases = ['/animations/', '../animations/'];
     for (const base of bases) {
       try {
         const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 30000); // 30s timeout
-        const r = await fetch(base + encodedFile + '?_t=' + Date.now(), { signal: controller.signal });
+        const tid = setTimeout(() => controller.abort(), 45000); // 45s timeout
+        const r = await fetch(base + encodedFile, { signal: controller.signal });
         clearTimeout(tid);
         if (r.ok) {
           const buf = await r.arrayBuffer();
           if (buf.byteLength > 0) return buf;
         }
-      } catch(e) {
-        if (attempt < 2) {
-          await new Promise(r => setTimeout(r, 1000 * attempt)); // backoff: 0s, 1s
-          return fetchFBX(def, attempt + 1);
-        }
-      }
+      } catch(e) { /* try next base */ }
+    }
+    // Retry with exponential backoff: 500ms, 1500ms
+    if (attempt < 2) {
+      await new Promise(r => setTimeout(r, 500 + attempt * 1000));
+      return fetchFBX(def, attempt + 1);
     }
     return null;
   }
 
-  // Process in batches of 3
-  const BATCH = 3;
-  for (let i = 0; i < anims.length; i += BATCH) {
-    const batch = anims.slice(i, i + BATCH);
-    const results = await Promise.allSettled(batch.map(def => fetchFBX(def, 0)));
-    for (let j = 0; j < batch.length; j++) {
-      const def  = batch[j];
-      const card = cardMap[def.slot];
-      const res  = results[j];
-      const buf  = res.status === 'fulfilled' ? res.value : null;
-      if (buf) {
-        G.loadedAnimBuffers[def.slot] = buf;
-        const wasSelected = selectedAnimSlots.has(def.slot);
-        card.className = 'anim-card' + (wasSelected ? ' selected' : '');
-        loadedCount++;
-        if (countEl) countEl.textContent = loadedCount + ' / ' + anims.length;
+  function applyResult(def, buf) {
+    const card = cardMap[def.slot];
+    if (buf) {
+      G.loadedAnimBuffers[def.slot] = buf;
+      card.className = 'anim-card' + (selectedAnimSlots.has(def.slot) ? ' selected' : '');
+      loadedCount++;
+      countEl.textContent = loadedCount + ' / ' + anims.length;
+      // Unblock START button as soon as ANY default slot is ready and a track is selected
+      if (DEFAULT_ANIM_SLOTS.includes(def.slot) && (G.selectedTrackURL || G.selectedTrackFile)) {
+        const btn = qs('#start-btn');
+        if (btn && btn.disabled && btn.textContent.includes('animations')) {
+          btn.disabled = false;
+          btn.textContent = 'START DANCING';
+        }
+      }
+    } else {
+      card.className = 'anim-card error';
+      card.title = 'Failed to load: ' + def.file;
+      console.error('[Anim] failed after retries:', def.file);
+    }
+  }
+
+  // ── Phase 1: fetch default slots in one batch (parallel, max 4) ──
+  // Block the start button until at least one default slot loads
+  if (defaultToFetch.length > 0) {
+    const startBtn = qs('#start-btn');
+    const hadTrack = startBtn && !startBtn.disabled;
+    if (hadTrack) {
+      startBtn.disabled = true;
+      startBtn.textContent = 'Loading animations…';
+    }
+    const results = await Promise.allSettled(defaultToFetch.map(def => fetchFBX(def, 0)));
+    results.forEach((res, i) => applyResult(defaultToFetch[i], res.value ?? null));
+    // Re-enable start button if a track is selected and at least one default slot loaded
+    const startBtn2 = qs('#start-btn');
+    if (startBtn2 && startBtn2.disabled && startBtn2.textContent.includes('animations')) {
+      if (G.selectedTrackURL || G.selectedTrackFile) {
+        startBtn2.disabled = false;
+        startBtn2.textContent = 'START DANCING';
       } else {
-        card.className = 'anim-card error';
-        card.title = 'Failed to load: ' + def.file;
-        console.error('[Anim] FAILED after retries:', def.file);
+        startBtn2.textContent = 'SELECT A TRACK TO START';
       }
     }
   }
-  countEl.textContent = loadedCount + ' / ' + anims.length;
+
+  // ── Phase 2: fetch extra slots in background (batches of 2, don't block UI) ──
+  (async () => {
+    const BATCH = 2;
+    for (let i = 0; i < extrasToFetch.length; i += BATCH) {
+      const batch = extrasToFetch.slice(i, i + BATCH);
+      const results = await Promise.allSettled(batch.map(def => fetchFBX(def, 0)));
+      results.forEach((res, j) => applyResult(batch[j], res.value ?? null));
+    }
+    _animPanelInitialized = true;
+  })();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1569,7 +1619,7 @@ qs('#start-screen').addEventListener('drop', async e => {
   if (refreshBtn) refreshBtn.addEventListener('click', async () => {
     refreshBtn.textContent = '…';
     refreshBtn.style.opacity = '0.4';
-    await Promise.all([initAnimationPanel(), initMusicPanel()]);
+    await Promise.all([initAnimationPanel(true), initMusicPanel()]); // true = forceRefresh
     refreshBtn.textContent = '↻';
     refreshBtn.style.opacity = '1';
   });
