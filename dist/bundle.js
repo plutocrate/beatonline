@@ -1257,7 +1257,9 @@ async function initAnimationPanel() {
   countEl.textContent = '0 / ' + anims.length;
   let loadedCount = 0;
 
-  const fetchPromises = anims.map(def => {
+  // Build cards first (instant UI)
+  const cardMap = {};
+  for (const def of anims) {
     const meta = SLOT_META[def.slot] || {
       key:   def.slot.replace(/extra(\d+)/, 'E$1').slice(0, 3).toUpperCase(),
       label: def.label || def.slot
@@ -1274,18 +1276,45 @@ async function initAnimationPanel() {
       '<div class="anim-name" title="' + displayLabel + '">' + displayLabel + '</div>';
     card.addEventListener('click', () => toggleAnimCard(card, def.slot));
     grid.appendChild(card);
+    cardMap[def.slot] = card;
     updateSelCountEl();
+  }
 
-    return (async () => {
-      let buf = null;
-      // URL-encode filename to handle spaces and special characters
-      const encodedFile = encodeURIComponent(def.file);
-      for (const base of ['/animations/', '../animations/']) {
-        try {
-          const r = await fetch(base + encodedFile + '?_t=' + Date.now());
-          if (r.ok) { buf = await r.arrayBuffer(); break; }
-        } catch(e) {}
+  // Fetch FBX files in batches of 3 to avoid overwhelming free-tier RAM/bandwidth
+  // Each file gets 2 retry attempts before giving up
+  async function fetchFBX(def, attempt) {
+    const encodedFile = encodeURIComponent(def.file);
+    const bases = ['/animations/', '../animations/'];
+    for (const base of bases) {
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 30000); // 30s timeout
+        const r = await fetch(base + encodedFile + '?_t=' + Date.now(), { signal: controller.signal });
+        clearTimeout(tid);
+        if (r.ok) {
+          const buf = await r.arrayBuffer();
+          if (buf.byteLength > 0) return buf;
+        }
+      } catch(e) {
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 1000 * attempt)); // backoff: 0s, 1s
+          return fetchFBX(def, attempt + 1);
+        }
       }
+    }
+    return null;
+  }
+
+  // Process in batches of 3
+  const BATCH = 3;
+  for (let i = 0; i < anims.length; i += BATCH) {
+    const batch = anims.slice(i, i + BATCH);
+    const results = await Promise.allSettled(batch.map(def => fetchFBX(def, 0)));
+    for (let j = 0; j < batch.length; j++) {
+      const def  = batch[j];
+      const card = cardMap[def.slot];
+      const res  = results[j];
+      const buf  = res.status === 'fulfilled' ? res.value : null;
       if (buf) {
         G.loadedAnimBuffers[def.slot] = buf;
         const wasSelected = selectedAnimSlots.has(def.slot);
@@ -1294,13 +1323,11 @@ async function initAnimationPanel() {
         if (countEl) countEl.textContent = loadedCount + ' / ' + anims.length;
       } else {
         card.className = 'anim-card error';
-        card.title = 'Could not load ' + def.file;
-        console.warn('[Anim] failed:', def.file);
+        card.title = 'Failed to load: ' + def.file;
+        console.error('[Anim] FAILED after retries:', def.file);
       }
-    })();
-  });
-
-  await Promise.allSettled(fetchPromises);
+    }
+  }
   countEl.textContent = loadedCount + ' / ' + anims.length;
 }
 
