@@ -381,15 +381,19 @@ function parseFBX(buffer) {
 }
 
 async function loadCharacterAndAnims() {
-  // Only use selected anim slots (or all if none selected)
+  // Determine which slots to use
   const allSlots = Object.keys(G.loadedAnimBuffers);
   const slots = selectedAnimSlots.size > 0
     ? allSlots.filter(s => selectedAnimSlots.has(s))
     : allSlots;
   if (slots.length === 0) { buildFallbackChar(); return; }
+
+  // Pick the best primary slot — prefer 'idle', else first available
   const primarySlot = slots.includes('idle') ? 'idle' : slots[0];
+
+  // ── Load ONLY the primary slot now — start game fast ────────
+  setLoadingUI('Loading character model…', 15);
   try {
-    setLoadingUI('Loading character model…', 15);
     const fbx = await parseFBX(G.loadedAnimBuffers[primarySlot]);
     fbx.scale.setScalar(0.01); fbx.position.set(0, 0.05, 0);
     fbx.traverse(c => {
@@ -409,41 +413,85 @@ async function loadCharacterAndAnims() {
       action.clampWhenFinished = false;
       animActions[primarySlot] = action;
     }
-  } catch(e) { console.warn('Base FBX failed, using fallback:', e); buildFallbackChar(); return; }
+  } catch(e) {
+    console.warn('Primary FBX failed, using fallback:', e);
+    buildFallbackChar();
+    return;
+  }
 
-  // Parse all remaining FBX files in parallel — much faster than sequential
+  // Start the queue with just the primary slot — game will start immediately
+  animQueue = [primarySlot];
+  animQueueIdx = 0;
+  _clipStartTime = 0; _animClock = 0;
+  playAnimSlot(primarySlot);
+
+  // ── Stream remaining slots one-by-one in the background ─────
+  // Each slot: fetch buffer (if not cached) → parse FBX → add to mixer + queue
+  // The game is already running while this happens.
   const remainingSlots = slots.filter(s => s !== primarySlot);
-  setLoadingUI(`Parsing ${remainingSlots.length} animations in parallel…`, 20);
-  const parseResults = await Promise.allSettled(
-    remainingSlots.map(slot =>
-      parseFBX(G.loadedAnimBuffers[slot]).then(fbx => ({ slot, fbx }))
-    )
-  );
-  let done = 1;
-  for (const result of parseResults) {
-    if (result.status === 'fulfilled') {
-      const { slot, fbx } = result.value;
+  streamRemainingAnims(remainingSlots);
+}
+
+// Called during gameplay — trickle-loads remaining animations one at a time.
+// Safe to call multiple times; skips already-loaded slots.
+async function streamRemainingAnims(slots) {
+  if (!slots || slots.length === 0) return;
+  for (const slot of slots) {
+    // Stop if game ended or user went back to menu
+    if (!mixer || !G.isPlaying) break;
+
+    // Skip if already parsed into animActions
+    if (animActions[slot]) {
+      if (!animQueue.includes(slot)) {
+        animQueue = [...animQueue, slot];
+      }
+      continue;
+    }
+
+    // Fetch buffer if not already in memory
+    if (!G.loadedAnimBuffers[slot]) {
+      try {
+        const anims = await fetchAnimationList();
+        const def = anims && anims.find(a => a.slot === slot);
+        if (!def) continue;
+        const encodedFile = encodeURIComponent(def.file);
+        let buf = null;
+        for (const base of ['/animations/', '../animations/']) {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 45000);
+            const r = await fetch(base + encodedFile, { signal: controller.signal });
+            clearTimeout(tid);
+            if (r.ok) { buf = await r.arrayBuffer(); if (buf.byteLength > 0) break; }
+          } catch(e) {}
+        }
+        if (!buf) continue; // silently skip on failure, don't break the stream
+        G.loadedAnimBuffers[slot] = buf;
+        // Update the card UI to show loaded
+        const card = document.querySelector('#anim-card-' + slot);
+        if (card) card.className = 'anim-card' + (selectedAnimSlots.has(slot) ? ' selected' : '');
+      } catch(e) { continue; }
+    }
+
+    // Parse FBX and add to the live mixer — no game interruption
+    try {
+      const fbx = await parseFBX(G.loadedAnimBuffers[slot]);
+      if (!mixer) break; // game ended while parsing
       if (fbx.animations && fbx.animations.length > 0) {
         const clip = fbx.animations[0]; clip.name = slot;
         const action = mixer.clipAction(clip);
         action.setLoop(THREE.LoopRepeat, Infinity);
         action.clampWhenFinished = false;
         animActions[slot] = action;
+        // Append to live queue — tickAnimPlaylist will pick it up on next cycle
+        if (!animQueue.includes(slot)) {
+          animQueue = [...animQueue, slot];
+        }
       }
-    } else {
-      console.warn(`Anim load failed:`, result.reason);
-    }
-    done++;
-    setLoadingUI(`Loaded ${done}/${slots.length} animations…`, 20 + Math.round((done/slots.length)*60));
-  }
+    } catch(e) { /* skip broken FBX, keep going */ }
 
-  const startSlot = animActions['idle'] ? 'idle' : Object.keys(animActions)[0];
-  if (startSlot) {
-    // Queue system: listen for finished events to chain animations
-    animQueue = Object.keys(animActions);
-    animQueueIdx = 0;
-    _clipStartTime = 0; _animClock = 0;
-    playAnimSlot(animQueue[0]);
+    // Small yield between slots — let the game loop breathe
+    await new Promise(r => setTimeout(r, 200));
   }
 }
 
@@ -1374,13 +1422,11 @@ async function initAnimationPanel(forceRefresh) {
       card.className = 'anim-card' + (selectedAnimSlots.has(def.slot) ? ' selected' : '');
       loadedCount++;
       countEl.textContent = loadedCount + ' / ' + anims.length;
-      // Unblock START button as soon as ANY default slot is ready and a track is selected
-      if (DEFAULT_ANIM_SLOTS.includes(def.slot) && (G.selectedTrackURL || G.selectedTrackFile)) {
-        const btn = qs('#start-btn');
-        if (btn && btn.disabled && btn.textContent.includes('animations')) {
-          btn.disabled = false;
-          btn.textContent = 'START DANCING';
-        }
+      // Unblock START button as soon as ANY slot buffer is ready and a track is selected
+      const btn = qs('#start-btn');
+      if (btn && btn.disabled && (G.selectedTrackURL || G.selectedTrackFile)) {
+        btn.disabled = false;
+        btn.textContent = 'START DANCING';
       }
     } else {
       card.className = 'anim-card error';
@@ -1389,36 +1435,17 @@ async function initAnimationPanel(forceRefresh) {
     }
   }
 
-  // ── Phase 1: fetch default slots in one batch (parallel, max 4) ──
-  // Block the start button until at least one default slot loads
-  if (defaultToFetch.length > 0) {
-    const startBtn = qs('#start-btn');
-    const hadTrack = startBtn && !startBtn.disabled;
-    if (hadTrack) {
-      startBtn.disabled = true;
-      startBtn.textContent = 'Loading animations…';
-    }
-    const results = await Promise.allSettled(defaultToFetch.map(def => fetchFBX(def, 0)));
-    results.forEach((res, i) => applyResult(defaultToFetch[i], res.value ?? null));
-    // Re-enable start button if a track is selected and at least one default slot loaded
-    const startBtn2 = qs('#start-btn');
-    if (startBtn2 && startBtn2.disabled && startBtn2.textContent.includes('animations')) {
-      if (G.selectedTrackURL || G.selectedTrackFile) {
-        startBtn2.disabled = false;
-        startBtn2.textContent = 'START DANCING';
-      } else {
-        startBtn2.textContent = 'SELECT A TRACK TO START';
-      }
-    }
-  }
-
-  // ── Phase 2: fetch extra slots in background (batches of 2, don't block UI) ──
+  // ── Fetch ALL unfetched slots in background — no blocking ──────
+  // Game can start as soon as 1 slot is in G.loadedAnimBuffers.
+  // The rest stream in during gameplay via streamRemainingAnims().
+  // Fetch defaults first (they load into the game immediately),
+  // then extras (they join the queue as they arrive mid-game).
   (async () => {
-    const BATCH = 2;
-    for (let i = 0; i < extrasToFetch.length; i += BATCH) {
-      const batch = extrasToFetch.slice(i, i + BATCH);
-      const results = await Promise.allSettled(batch.map(def => fetchFBX(def, 0)));
-      results.forEach((res, j) => applyResult(batch[j], res.value ?? null));
+    const ordered = [...defaultToFetch, ...extrasToFetch];
+    for (const def of ordered) {
+      const result = await fetchFBX(def, 0).catch(() => null);
+      applyResult(def, result);
+      await new Promise(r => setTimeout(r, 50)); // yield between fetches
     }
     _animPanelInitialized = true;
   })();
